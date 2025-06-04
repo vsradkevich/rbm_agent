@@ -1,7 +1,10 @@
 # src/train.py
 
 import torch
-from model.revnet import RevNet18
+import numpy as np
+import random
+
+from model.tinyrevnet import TinyReversibleConvNet
 from model.rbm import RBM
 from model.critic import Critic
 from model.compressor import FlowCompressor
@@ -9,7 +12,16 @@ from buffer import RingBuffer
 from agent import ReversibleAgent
 from env import GridWorld
 
-import numpy as np
+
+def set_seed(seed=42):
+    """
+    Фиксирует seed для воспроизводимости экспериментов.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def train(
@@ -20,10 +32,12 @@ def train(
         grid_size=8,
         device='cuda',
         lr_rbm=1e-3,
+        output_dim=128,  # новый параметр: размер выходных признаков RevNet/RBM
         hidden_dim=32,
         noise_prob=0.1,
         verbose=True,
         save_path=None,
+        seed=42,
 ):
     """
     Главный цикл обучения PoC-агента:
@@ -32,13 +46,13 @@ def train(
     - Обучение RBM по признакам из буфера.
     - Логирование метрик (total_reward, free_energy).
     """
-    # Инициализация среды и компонентов
+    set_seed(seed)
     env = GridWorld(grid_size=grid_size, noise_prob=noise_prob)
-    revnet = RevNet18().to(device)
-    rbm = RBM(visible_dim=512, hidden_dim=hidden_dim, lr=lr_rbm).to(device)
+    revnet = TinyReversibleConvNet(output_dim=output_dim).to(device)
+    rbm = RBM(visible_dim=output_dim, hidden_dim=hidden_dim, lr=lr_rbm).to(device)
     critic = Critic()
-    compressor = FlowCompressor(dim=512).to(device)  # Пока не используется явно
-    buffer = RingBuffer(state_dim=512, size=buffer_size)
+    compressor = FlowCompressor(dim=output_dim).to(device)  # Пока не используется явно
+    buffer = RingBuffer(state_dim=output_dim, size=buffer_size)
     agent = ReversibleAgent(revnet, rbm, critic, device=device)
 
     rewards_log = []
@@ -63,7 +77,7 @@ def train(
             features_np = features.squeeze(0).cpu().numpy()
             buffer.add(features_np, reward)
 
-            # Обучение RBM по батчам из буфера (batch_size >= 2, ошибка BatchNorm не возникает)
+            # CD-обучение RBM: на каждом шаге буфер скользит по свежим признакам
             if len(buffer) >= batch_size:
                 batch_states, _ = buffer.sample(batch_size)
                 batch_states = torch.tensor(batch_states, dtype=torch.float32).to(device)
@@ -96,4 +110,15 @@ def train(
 
 
 if __name__ == "__main__":
-    train(epochs=30, steps_per_epoch=128, grid_size=8, device='cuda')
+    # Можно быстро сменить размерность output_dim и hidden_dim для ускорения
+    train(
+        epochs=30,
+        steps_per_epoch=128,
+        grid_size=8,
+        device='cuda',
+        output_dim=128,  # меньше — быстрее, достаточно для GridWorld
+        hidden_dim=16,  # можно уменьшить для легкой экспериментации
+        batch_size=16,
+        buffer_size=4096,
+        seed=42
+    )
