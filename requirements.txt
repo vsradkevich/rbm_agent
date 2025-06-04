@@ -1,0 +1,7 @@
+torch>=2.0
+torchvision>=0.15
+numpy>=1.23
+matplotlib>=3.5
+# gymnasium или gym для расширяемых сред (по желанию):
+# gymnasium>=0.28
+# gym>=0.26
